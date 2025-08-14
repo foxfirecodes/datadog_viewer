@@ -189,6 +189,7 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DataDog Error Viewer</title>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -345,10 +346,53 @@ HTML_TEMPLATE = """
             opacity: 0.5;
             pointer-events: none;
         }
+        .search-bar {
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .search-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        .search-input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+        }
+        .filter-controls {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+            align-items: center;
+        }
+        .filter-select {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+        }
+        .filter-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .filter-checkbox input {
+            transform: scale(1.1);
+        }
+        .clickable {
+            cursor: pointer;
+        }
+        .clickable:hover {
+            background-color: #f5f5f5;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container" x-data="errorViewer()">
         <div class="header">
             <h1>DataDog Error Viewer</h1>
             <p>Track and manage test errors from DataDog exports</p>
@@ -356,23 +400,43 @@ HTML_TEMPLATE = """
 
         <div class="stats">
             <div class="stat-item">
-                <div class="stat-number">{{ stats.total }}</div>
+                <div class="stat-number" x-text="stats.total"></div>
                 <div class="stat-label">Total Errors</div>
             </div>
             <div class="stat-item">
-                <div class="stat-number">{{ stats.addressed }}</div>
+                <div class="stat-number" x-text="stats.addressed"></div>
                 <div class="stat-label">Addressed</div>
             </div>
             <div class="stat-item">
-                <div class="stat-number">{{ stats.unaddressed }}</div>
+                <div class="stat-number" x-text="stats.unaddressed"></div>
                 <div class="stat-label">Unaddressed</div>
             </div>
             <div class="stat-item">
-                <div class="stat-number">{{ stats.progress_percent }}%</div>
+                <div class="stat-number" x-text="stats.progress_percent + '%'"></div>
                 <div class="stat-label">Progress</div>
                 <div class="progress-bar">
-                    <div class="progress-fill" style="width: {{ stats.progress_percent }}%"></div>
+                    <div class="progress-fill" :style="'width: ' + stats.progress_percent + '%'"></div>
                 </div>
+            </div>
+        </div>
+
+        <div class="search-bar">
+            <input type="text" 
+                   class="search-input" 
+                   placeholder="Search errors by file, test name, or error message..."
+                   x-model="searchQuery"
+                   @input="filterErrors">
+            <div class="filter-controls">
+                <select class="filter-select" x-model="statusFilter" @change="filterErrors">
+                    <option value="all">All Status</option>
+                    <option value="addressed">Addressed Only</option>
+                    <option value="unaddressed">Unaddressed Only</option>
+                </select>
+                <div class="filter-checkbox">
+                    <input type="checkbox" id="showDetails" @change="toggleAllErrorDetails">
+                    <label for="showDetails">Show all error details</label>
+                </div>
+                <span x-text="'Showing ' + (filteredErrors ? filteredErrors.length : 0) + ' of ' + (allErrors ? allErrors.length : 0) + ' errors'"></span>
             </div>
         </div>
 
@@ -387,99 +451,193 @@ HTML_TEMPLATE = """
                     </tr>
                 </thead>
                 <tbody>
-                    {% for error in errors %}
-                    <tr class="{% if error.addressed %}addressed{% endif %}" data-error-id="{{ error.id }}">
-                                                <td class="checkbox-cell">
-                            <input type="checkbox" class="checkbox"
-                                   {% if error.addressed %}checked{% endif %}
-                                   onchange="toggleError('{{ error.id }}', this)">
-                        </td>
-                        <td class="file-cell">{{ error.file }}</td>
-                        <td class="test-cell">{{ error.test_name }}</td>
-                        <td class="error-cell">
-                            <div class="error-summary" onclick="toggleErrorDetails(this)">
-                                {{ error.error_summary }}
-                            </div>
-                            <div class="error-details">{{ error.error_full }}</div>
-                        </td>
-                    </tr>
-                    {% endfor %}
+                    <template x-for="error in paginatedErrors" x-key="error.id">
+                        <tr :class="{ 'addressed': error.addressed, 'loading': error.loading }" :data-error-id="error.id">
+                            <td class="checkbox-cell">
+                                <input type="checkbox" class="checkbox"
+                                       :checked="error.addressed"
+                                       @change="toggleError(error.id, $event.target)">
+                            </td>
+                            <td class="file-cell" x-text="error.file"></td>
+                            <td class="test-cell" x-text="error.test_name"></td>
+                            <td class="error-cell">
+                                <div class="error-summary" 
+                                     @click="toggleErrorDetails(error.id)"
+                                     x-text="error.error_summary"></div>
+                                <div class="error-details" 
+                                     :class="{ 'show': error.showDetails }"
+                                     x-text="error.error_full"></div>
+                            </td>
+                        </tr>
+                    </template>
                 </tbody>
             </table>
         </div>
 
-        {% if pagination.total_pages > 1 %}
-        <div class="pagination">
-            {% if pagination.has_prev %}
-                <a href="?page={{ pagination.current_page - 1 }}">&laquo; Previous</a>
-            {% else %}
-                <span class="disabled">&laquo; Previous</span>
-            {% endif %}
-
-            {% for page_num in range(1, pagination.total_pages + 1) %}
-                {% if page_num == pagination.current_page %}
-                    <span class="current">{{ page_num }}</span>
-                {% else %}
-                    <a href="?page={{ page_num }}">{{ page_num }}</a>
-                {% endif %}
-            {% endfor %}
-
-            {% if pagination.has_next %}
-                <a href="?page={{ pagination.current_page + 1 }}">Next &raquo;</a>
-            {% else %}
-                <span class="disabled">Next &raquo;</span>
-            {% endif %}
+        <div class="pagination" x-show="totalPages > 1">
+            <a href="#" 
+               @click.prevent="changePage(currentPage - 1)"
+               :class="{ 'disabled': currentPage <= 1 }">&laquo; Previous</a>
+            
+            <template x-for="pageNum in pageNumbers" x-key="pageNum">
+                <span :class="{ 'current': pageNum === currentPage, 'clickable': pageNum !== currentPage }"
+                      x-text="pageNum"
+                      @click="pageNum !== currentPage && changePage(pageNum)"></span>
+            </template>
+            
+            <a href="#" 
+               @click.prevent="changePage(currentPage + 1)"
+               :class="{ 'disabled': currentPage >= totalPages }">Next &raquo;</a>
         </div>
-        {% endif %}
     </div>
 
     <script>
-        function toggleError(errorId, checkbox) {
-            const row = checkbox.closest('tr');
-            row.classList.add('loading');
-
-            fetch(`/api/toggle/${encodeURIComponent(errorId)}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
+        function errorViewer() {
+            return {
+                allErrors: [],
+                filteredErrors: [],
+                searchQuery: '',
+                statusFilter: 'all',
+                showAllDetails: false,
+                currentPage: 1,
+                pageSize: 50,
+                stats: { total: 0, addressed: 0, unaddressed: 0, progress_percent: 0 },
+                
+                init() {
+                    // Initialize with data from Flask
+                    this.allErrors = {{ errors | tojson }};
+                    this.stats = {{ stats | tojson }};
+                    
+                    // Add showDetails property to each error (default: false)
+                    this.allErrors.forEach(error => {
+                        error.showDetails = false;
+                        error.loading = false;
+                    });
+                    
+                    this.filteredErrors = [...this.allErrors];
+                },
+                
+                get paginatedErrors() {
+                    if (!this.filteredErrors || this.filteredErrors.length === 0) {
+                        return [];
+                    }
+                    const start = (this.currentPage - 1) * this.pageSize;
+                    const end = start + this.pageSize;
+                    return this.filteredErrors.slice(start, end);
+                },
+                
+                get totalPages() {
+                    if (!this.filteredErrors) return 1;
+                    return Math.ceil(this.filteredErrors.length / this.pageSize);
+                },
+                
+                get pageNumbers() {
+                    if (!this.filteredErrors) return [];
+                    const pages = [];
+                    const maxVisible = 7;
+                    let start = Math.max(1, this.currentPage - Math.floor(maxVisible / 2));
+                    let end = Math.min(this.totalPages, start + maxVisible - 1);
+                    
+                    if (end - start + 1 < maxVisible) {
+                        start = Math.max(1, end - maxVisible + 1);
+                    }
+                    
+                    for (let i = start; i <= end; i++) {
+                        pages.push(i);
+                    }
+                    return pages;
+                },
+                
+                filterErrors() {
+                    if (!this.allErrors) return;
+                    
+                    let filtered = this.allErrors;
+                    
+                    // Apply search filter
+                    if (this.searchQuery.trim()) {
+                        const query = this.searchQuery.toLowerCase();
+                        filtered = filtered.filter(error => 
+                            error.file.toLowerCase().includes(query) ||
+                            error.test_name.toLowerCase().includes(query) ||
+                            error.error_summary.toLowerCase().includes(query) ||
+                            error.error_full.toLowerCase().includes(query)
+                        );
+                    }
+                    
+                    // Apply status filter
+                    if (this.statusFilter === 'addressed') {
+                        filtered = filtered.filter(error => error.addressed);
+                    } else if (this.statusFilter === 'unaddressed') {
+                        filtered = filtered.filter(error => !error.addressed);
+                    }
+                    
+                    this.filteredErrors = filtered;
+                    this.currentPage = 1; // Reset to first page when filtering
+                },
+                
+                changePage(page) {
+                    if (page >= 1 && page <= this.totalPages) {
+                        this.currentPage = page;
+                    }
+                },
+                
+                toggleErrorDetails(errorId) {
+                    const error = this.allErrors.find(e => e.id === errorId);
+                    if (error) {
+                        error.showDetails = !error.showDetails;
+                    }
+                },
+                
+                toggleAllErrorDetails() {
+                    const checkbox = document.getElementById('showDetails');
+                    const showAll = checkbox.checked;
+                    
+                    this.allErrors.forEach(error => {
+                        error.showDetails = showAll;
+                    });
+                },
+                
+                async toggleError(errorId, checkbox) {
+                    const error = this.allErrors.find(e => e.id === errorId);
+                    if (!error) return;
+                    
+                    error.loading = true;
+                    
+                    try {
+                        const response = await fetch(`/api/toggle/${encodeURIComponent(errorId)}`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            }
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            error.addressed = data.addressed;
+                            this.updateStats();
+                        } else {
+                            console.error('Error toggling status:', data.error);
+                            checkbox.checked = !checkbox.checked; // Revert checkbox
+                        }
+                    } catch (error) {
+                        console.error('Error:', error);
+                        checkbox.checked = !checkbox.checked; // Revert checkbox
+                    } finally {
+                        error.loading = false;
+                    }
+                },
+                
+                async updateStats() {
+                    try {
+                        const response = await fetch('/api/stats');
+                        const newStats = await response.json();
+                        this.stats = newStats;
+                    } catch (error) {
+                        console.error('Error updating stats:', error);
+                    }
                 }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    row.classList.toggle('addressed', data.addressed);
-                    updateStats();
-                } else {
-                    console.error('Error toggling status:', data.error);
-                    checkbox.checked = !checkbox.checked; // Revert checkbox
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                checkbox.checked = !checkbox.checked; // Revert checkbox
-            })
-            .finally(() => {
-                row.classList.remove('loading');
-            });
-        }
-
-        function toggleErrorDetails(element) {
-            const details = element.nextElementSibling;
-            details.classList.toggle('show');
-        }
-
-        function updateStats() {
-            fetch('/api/stats')
-                .then(response => response.json())
-                .then(stats => {
-                    // Update stats display
-                    document.querySelectorAll('.stat-number')[0].textContent = stats.total;
-                    document.querySelectorAll('.stat-number')[1].textContent = stats.addressed;
-                    document.querySelectorAll('.stat-number')[2].textContent = stats.unaddressed;
-                    document.querySelectorAll('.stat-number')[3].textContent = stats.progress_percent + '%';
-                    document.querySelector('.progress-fill').style.width = stats.progress_percent + '%';
-                })
-                .catch(error => console.error('Error updating stats:', error));
+            }
         }
     </script>
 </body>
