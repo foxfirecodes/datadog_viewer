@@ -8,6 +8,7 @@ import csv
 import json
 import os
 from datetime import datetime
+from typing import TypedDict
 
 from flask import Flask, jsonify, render_template_string
 
@@ -18,14 +19,24 @@ CSV_FILE = "errors.csv"
 PERSISTENCE_FILE = "addressed_errors.json"
 
 
+class ErrorData(TypedDict):
+    id: str
+    file: str
+    test_name: str
+    error_summary: str
+    error_full: str
+    addressed: bool
+    timestamp: datetime
+
+
 class ErrorTracker:
     """Manages error data and persistence."""
 
     def __init__(self, csv_file: str, persistence_file: str):
-        self.csv_file = csv_file
-        self.persistence_file = persistence_file
-        self.errors = []
-        self.addressed_errors = self._load_persistence()
+        self.csv_file: str = csv_file
+        self.persistence_file: str = persistence_file
+        self.errors: list[ErrorData] = []
+        self.addressed_errors: dict[str, bool] = self._load_persistence()
         self._load_errors()
 
     def _load_persistence(self) -> dict[str, bool]:
@@ -53,13 +64,11 @@ class ErrorTracker:
             return
 
         # Dictionary to track errors by ID, keeping the newest timestamp
-        error_dict = {}
+        error_dict: dict[str, ErrorData] = {}
 
         try:
             with open(self.csv_file, "r", encoding="utf-8") as f:
                 reader = csv.reader(f)
-                next(reader)  # Skip header
-
                 for line_num, row in enumerate(reader, start=2):
                     if len(row) < 2:
                         continue
@@ -105,7 +114,7 @@ class ErrorTracker:
                             else "No error message"
                         )
 
-                        error_data = {
+                        error_data: ErrorData = {
                             "id": error_id,
                             "file": test_file,
                             "test_name": test_name,
@@ -177,7 +186,7 @@ def index():
 
 
 @app.route("/api/toggle/<path:error_id>", methods=["POST"])
-def toggle_error(error_id):
+def toggle_error(error_id: str):
     """API endpoint to toggle error status."""
     try:
         new_status = error_tracker.toggle_error_status(error_id)
