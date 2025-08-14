@@ -449,6 +449,42 @@ HTML_TEMPLATE = """
         .clickable:hover {
             background-color: #f5f5f5;
         }
+        .selected {
+            background-color: #e3f2fd !important;
+            border-left: 3px solid #2196f3;
+            box-shadow: inset 0 0 0 1px #2196f3;
+        }
+        .selected:hover {
+            background-color: #bbdefb !important;
+        }
+        .table-container {
+            position: relative;
+        }
+        tbody tr {
+            user-select: none; /* Prevent text selection on table rows */
+            cursor: pointer; /* Show pointer cursor to indicate clickable */
+        }
+        tbody tr.selected {
+            user-select: none; /* Ensure selected rows also prevent text selection */
+        }
+        tbody tr:not(.selected):hover {
+            background-color: #f0f8ff; /* Light blue hover for non-selected rows */
+        }
+        .selection-info {
+            position: absolute;
+            top: -40px;
+            right: 0;
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 14px;
+            color: #1976d2;
+            display: none;
+        }
+        .selection-info.show {
+            display: block;
+        }
         .copy-btn {
             background: #007bff;
             color: white;
@@ -518,14 +554,28 @@ HTML_TEMPLATE = """
                     <label for="showDetails">Show all error details</label>
                 </div>
                 <span x-text="'Showing ' + (filteredErrors ? filteredErrors.length : 0) + ' of ' + (allErrors ? allErrors.length : 0) + ' errors'"></span>
+                <span x-show="getSelectedErrors().length > 0" 
+                      x-text="'(' + getSelectedErrors().length + ' selected)'"
+                      style="color: #007bff; font-weight: 500;"></span>
             </div>
         </div>
 
         <div class="table-container">
+            <div class="selection-info" 
+                 :class="{ 'show': getSelectedErrors().length > 0 }"
+                 x-text="getSelectedErrors().length + ' row(s) selected. Click checkbox on any selected row to apply to all.'">
+            </div>
             <table>
                 <thead>
                     <tr>
-                        <th class="checkbox-cell">Status</th>
+                        <th class="checkbox-cell">
+                            <span x-show="getSelectedErrors().length === 0" 
+                                  title="Click row to select, Shift+Click for range selection">Status</span>
+                            <span x-show="getSelectedErrors().length > 0" 
+                                  x-text="getSelectedErrors().length + ' selected'"
+                                  style="color: #2196f3; font-size: 12px;"
+                                  title="Click checkbox on any selected row to apply to all"></span>
+                        </th>
                         <th class="file-cell">File</th>
                         <th class="test-cell">Test Name</th>
                         <th class="error-cell">Error Summary</th>
@@ -533,11 +583,15 @@ HTML_TEMPLATE = """
                 </thead>
                 <tbody>
                     <template x-for="error in paginatedErrors" x-key="error.id">
-                        <tr :class="{ 'addressed': error.addressed, 'loading': error.loading }" :data-error-id="error.id">
+                        <tr :class="{ 'addressed': error.addressed, 'loading': error.loading, 'selected': error.selected }" 
+                            :data-error-id="error.id"
+                            @click="selectRow(error.id, $event)"
+                            @dblclick="toggleErrorDetails(error.id)">
                             <td class="checkbox-cell">
                                 <input type="checkbox" class="checkbox"
                                        :checked="error.addressed"
-                                       @change="toggleError(error.id, $event.target)">
+                                       @change="toggleError(error.id, $event.target)"
+                                       @click.stop>
                             </td>
                             <td class="file-cell" x-text="error.file"></td>
                             <td class="test-cell">
@@ -600,9 +654,25 @@ HTML_TEMPLATE = """
                     this.allErrors.forEach(error => {
                         error.showDetails = false;
                         error.loading = false;
+                        error.selected = false; // Initialize selected state
                     });
                     
                     this.filteredErrors = [...this.allErrors];
+                    
+                    // Add keyboard event listener for Escape key
+                    document.addEventListener('keydown', (event) => {
+                        if (event.key === 'Escape') {
+                            this.clearAllSelections();
+                        }
+                    });
+                    
+                    // Add click listener to document body to clear selections when clicking outside
+                    document.addEventListener('click', (event) => {
+                        // Only clear if clicking outside the table rows
+                        if (!event.target.closest('tr') && !event.target.closest('.search-bar') && !event.target.closest('.pagination')) {
+                            this.clearAllSelections();
+                        }
+                    });
                 },
                 
                 get paginatedErrors() {
@@ -754,7 +824,143 @@ HTML_TEMPLATE = """
                         document.execCommand('copy');
                         document.body.removeChild(textArea);
                     });
-                }
+                },
+
+                selectRow(errorId, event) {
+                    const error = this.allErrors.find(e => e.id === errorId);
+                    if (!error) return;
+
+                    if (event.shiftKey && this.lastSelectedRow) {
+                        // Shift-click: select range between last selected row and current row
+                        event.preventDefault(); // Prevent text selection
+                        this.selectRowRange(this.lastSelectedRow, errorId);
+                    } else {
+                        // Single click: check if clicking on already selected row
+                        if (error.selected) {
+                            // If clicking on already selected row, don't change selection
+                            return;
+                        } else {
+                            // Clear all selections and select current row
+                            this.clearAllSelections();
+                            error.selected = true;
+                            this.lastSelectedRow = errorId;
+                        }
+                    }
+                },
+
+                selectRowRange(startId, endId) {
+                    const startIndex = this.allErrors.findIndex(e => e.id === startId);
+                    const endIndex = this.allErrors.findIndex(e => e.id === endId);
+                    
+                    if (startIndex === -1 || endIndex === -1) return;
+                    
+                    const start = Math.min(startIndex, endIndex);
+                    const end = Math.max(startIndex, endIndex);
+                    
+                    for (let i = start; i <= end; i++) {
+                        this.allErrors[i].selected = true;
+                    }
+                },
+
+                clearAllSelections() {
+                    this.allErrors.forEach(error => {
+                        error.selected = false;
+                    });
+                },
+
+                getSelectedErrors() {
+                    return this.allErrors.filter(error => error.selected);
+                },
+
+                async toggleError(errorId, checkbox) {
+                    const error = this.allErrors.find(e => e.id === errorId);
+                    if (!error) return;
+                    
+                    // Check if this is a bulk operation
+                    const selectedErrors = this.getSelectedErrors();
+                    const isBulkOperation = selectedErrors.length > 1 && error.selected;
+                    
+                    if (isBulkOperation) {
+                        // Apply to all selected rows
+                        await this.bulkToggleErrors(selectedErrors, checkbox.checked);
+                    } else {
+                        // Single row operation
+                        await this.singleToggleError(errorId, checkbox);
+                    }
+                },
+
+                async singleToggleError(errorId, checkbox) {
+                    const error = this.allErrors.find(e => e.id === errorId);
+                    if (!error) return;
+                    
+                    error.loading = true;
+                    
+                    try {
+                        const response = await fetch(`/api/toggle/${encodeURIComponent(errorId)}`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            }
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            error.addressed = data.addressed;
+                            this.updateStats();
+                        } else {
+                            console.error('Error toggling status:', data.error);
+                            checkbox.checked = !checkbox.checked; // Revert checkbox
+                        }
+                    } catch (error) {
+                        console.error('Error:', error);
+                        checkbox.checked = !checkbox.checked; // Revert checkbox
+                    } finally {
+                        error.loading = false;
+                    }
+                },
+
+                async bulkToggleErrors(selectedErrors, newStatus) {
+                    // Set loading state for all selected errors
+                    selectedErrors.forEach(error => {
+                        error.loading = true;
+                    });
+                    
+                    try {
+                        // Process all selected errors
+                        const promises = selectedErrors.map(error => 
+                            fetch(`/api/toggle/${encodeURIComponent(error.id)}`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                }
+                            }).then(response => response.json())
+                        );
+                        
+                        const results = await Promise.all(promises);
+                        
+                        // Update all errors based on results
+                        results.forEach((result, index) => {
+                            if (result.success) {
+                                selectedErrors[index].addressed = result.addressed;
+                            } else {
+                                console.error(`Error toggling status for ${selectedErrors[index].id}:`, result.error);
+                            }
+                        });
+                        
+                        this.updateStats();
+                        
+                        // Don't clear selections after bulk operation - keep them selected
+                        
+                    } catch (error) {
+                        console.error('Error in bulk operation:', error);
+                    } finally {
+                        // Clear loading state for all selected errors
+                        selectedErrors.forEach(error => {
+                            error.loading = false;
+                        });
+                    }
+                },
             }
         }
     </script>
