@@ -5,12 +5,11 @@ A simple web interface to track and manage DataDog test errors from CSV exports.
 """
 
 import csv
-import json
 import os
 from datetime import datetime
-from typing import TypedDict
 
 from flask import Flask, jsonify, render_template_string
+from pydantic import BaseModel, ValidationError
 
 app = Flask(__name__)
 
@@ -19,7 +18,25 @@ CSV_FILE = "errors.csv"
 PERSISTENCE_FILE = "addressed_errors.json"
 
 
-class ErrorData(TypedDict):
+class TestSource(BaseModel):
+    file: str
+
+
+class TestInfo(BaseModel):
+    source: TestSource
+    name: str
+
+
+class ErrorInfo(BaseModel):
+    message: str
+
+
+class DataDogMessage(BaseModel):
+    test: TestInfo
+    error: ErrorInfo
+
+
+class ErrorData(BaseModel):
     id: str
     file: str
     test_name: str
@@ -44,8 +61,21 @@ class ErrorTracker:
         try:
             if os.path.exists(self.persistence_file):
                 with open(self.persistence_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+                    data = f.read()
+                    if data.strip():
+                        # Use Pydantic's JSON parsing for better error handling
+                        from pydantic_core import from_json
+
+                        parsed_data = from_json(data)
+                        if isinstance(parsed_data, dict):
+                            return parsed_data
+                        else:
+                            print(
+                                "Warning: Persistence file does not contain a dictionary"
+                            )
+                            return {}
+                    return {}
+        except Exception as e:
             print(f"Warning: Could not load persistence file: {e}")
         return {}
 
@@ -53,7 +83,10 @@ class ErrorTracker:
         """Save addressed error states to JSON file."""
         try:
             with open(self.persistence_file, "w", encoding="utf-8") as f:
-                json.dump(self.addressed_errors, f, indent=2)
+                from pydantic_core import to_json
+
+                json_str = to_json(self.addressed_errors, indent=2)
+                f.write(json_str.decode("utf-8"))
         except IOError as e:
             print(f"Error: Could not save persistence file: {e}")
 
@@ -87,15 +120,21 @@ class ErrorTracker:
                             )
                             continue
 
-                        # Parse the JSON message
-                        message_data = json.loads(row[1])
-                        test_info = message_data.get("test", {})
-                        error_info = message_data.get("error", {})
+                        # Parse the JSON message using Pydantic
+                        try:
+                            message_data = DataDogMessage.model_validate_json(row[1])
+                            test_info = message_data.test
+                            error_info = message_data.error
+                        except ValidationError as e:
+                            print(
+                                f"Warning: Could not validate JSON on line {line_num}: {e}"
+                            )
+                            continue
 
                         # Extract error details
-                        test_file = test_info.get("source", {}).get("file", "unknown")
-                        test_name = test_info.get("name", "unknown")
-                        error_message = error_info.get("message", "")
+                        test_file = test_info.source.file
+                        test_name = test_info.name
+                        error_message = error_info.message
 
                         # Filter out application context errors
                         if (
@@ -114,24 +153,24 @@ class ErrorTracker:
                             else "No error message"
                         )
 
-                        error_data: ErrorData = {
-                            "id": error_id,
-                            "file": test_file,
-                            "test_name": test_name,
-                            "error_summary": error_summary,
-                            "error_full": error_message,
-                            "addressed": self.addressed_errors.get(error_id, False),
-                            "timestamp": timestamp,
-                        }
+                        error_data = ErrorData(
+                            id=error_id,
+                            file=test_file,
+                            test_name=test_name,
+                            error_summary=error_summary,
+                            error_full=error_message,
+                            addressed=self.addressed_errors.get(error_id, False),
+                            timestamp=timestamp,
+                        )
 
                         # Keep the error with the newest timestamp if there are duplicates
                         if (
                             error_id not in error_dict
-                            or timestamp > error_dict[error_id]["timestamp"]
+                            or timestamp > error_dict[error_id].timestamp
                         ):
                             error_dict[error_id] = error_data
 
-                    except (json.JSONDecodeError, KeyError) as e:
+                    except (ValidationError, KeyError) as e:
                         print(f"Warning: Could not parse line {line_num}: {e}")
                         continue
 
@@ -139,7 +178,7 @@ class ErrorTracker:
             print(f"Error: Could not read CSV file: {e}")
 
         # Convert dictionary values to list and sort by error ID alphabetically
-        self.errors = sorted(error_dict.values(), key=lambda x: x["id"])
+        self.errors = sorted(error_dict.values(), key=lambda x: x.id)
 
     def toggle_error_status(self, error_id: str) -> bool:
         """Toggle the addressed status of an error."""
@@ -150,8 +189,8 @@ class ErrorTracker:
 
         # Update the error in our list
         for error in self.errors:
-            if error["id"] == error_id:
-                error["addressed"] = self.addressed_errors[error_id]
+            if error.id == error_id:
+                error.addressed = self.addressed_errors[error_id]
                 break
 
         self._save_persistence()
@@ -160,7 +199,7 @@ class ErrorTracker:
     def get_stats(self):
         """Get error statistics."""
         total = len(self.errors)
-        addressed = sum(1 for error in self.errors if error["addressed"])
+        addressed = sum(1 for error in self.errors if error.addressed)
         unaddressed = total - addressed
 
         return {
@@ -180,9 +219,10 @@ def index():
     """Main page displaying errors."""
     stats = error_tracker.get_stats()
 
-    return render_template_string(
-        HTML_TEMPLATE, errors=error_tracker.errors, stats=stats
-    )
+    # Convert Pydantic models to dictionaries for JSON serialization in template
+    errors_dict = [error.model_dump() for error in error_tracker.errors]
+
+    return render_template_string(HTML_TEMPLATE, errors=errors_dict, stats=stats)
 
 
 @app.route("/api/toggle/<path:error_id>", methods=["POST"])
@@ -671,7 +711,7 @@ if __name__ == "__main__":
     print(f"CSV file: {CSV_FILE}")
     print(f"Persistence file: {PERSISTENCE_FILE}")
     print(f"Total errors loaded: {len(error_tracker.errors)}")
-    print(f"Addressed errors: {sum(1 for e in error_tracker.errors if e['addressed'])}")
+    print(f"Addressed errors: {sum(1 for e in error_tracker.errors if e.addressed)}")
     print("\nStarting Flask application...")
     print("Open http://localhost:6969 in your browser")
 
