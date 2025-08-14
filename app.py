@@ -8,17 +8,14 @@ import csv
 import json
 import os
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string
 
 app = Flask(__name__)
 
 # Configuration
-CSV_FILE = 'errors.csv'
-PERSISTENCE_FILE = 'addressed_errors.json'
-PAGE_SIZE = 50  # Number of errors to show per page
+CSV_FILE = "errors.csv"
+PERSISTENCE_FILE = "addressed_errors.json"
 
 
 class ErrorTracker:
@@ -31,23 +28,23 @@ class ErrorTracker:
         self.addressed_errors = self._load_persistence()
         self._load_errors()
 
-    def _load_persistence(self) -> Dict[str, bool]:
+    def _load_persistence(self) -> dict[str, bool]:
         """Load addressed error states from JSON file."""
         try:
             if os.path.exists(self.persistence_file):
-                with open(self.persistence_file, 'r', encoding='utf-8') as f:
+                with open(self.persistence_file, "r", encoding="utf-8") as f:
                     return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
-            print(f'Warning: Could not load persistence file: {e}')
+            print(f"Warning: Could not load persistence file: {e}")
         return {}
 
     def _save_persistence(self):
         """Save addressed error states to JSON file."""
         try:
-            with open(self.persistence_file, 'w', encoding='utf-8') as f:
+            with open(self.persistence_file, "w", encoding="utf-8") as f:
                 json.dump(self.addressed_errors, f, indent=2)
         except IOError as e:
-            print(f'Error: Could not save persistence file: {e}')
+            print(f"Error: Could not save persistence file: {e}")
 
     def _load_errors(self):
         """Load and parse errors from CSV file."""
@@ -59,7 +56,7 @@ class ErrorTracker:
         error_dict = {}
 
         try:
-            with open(self.csv_file, 'r', encoding='utf-8') as f:
+            with open(self.csv_file, "r", encoding="utf-8") as f:
                 reader = csv.reader(f)
                 next(reader)  # Skip header
 
@@ -72,72 +69,68 @@ class ErrorTracker:
                         timestamp_str = row[0]
                         try:
                             # Parse ISO 8601 timestamp
-                            timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                            timestamp = datetime.fromisoformat(
+                                timestamp_str.replace("Z", "+00:00")
+                            )
                         except ValueError:
-                            print(f'Warning: Could not parse timestamp on line {line_num}: {timestamp_str}')
+                            print(
+                                f"Warning: Could not parse timestamp on line {line_num}: {timestamp_str}"
+                            )
                             continue
 
                         # Parse the JSON message
                         message_data = json.loads(row[1])
-                        test_info = message_data.get('test', {})
-                        error_info = message_data.get('error', {})
+                        test_info = message_data.get("test", {})
+                        error_info = message_data.get("error", {})
 
                         # Extract error details
-                        test_file = test_info.get('source', {}).get('file', 'unknown')
-                        test_name = test_info.get('name', 'unknown')
-                        error_message = error_info.get('message', '')
+                        test_file = test_info.get("source", {}).get("file", "unknown")
+                        test_name = test_info.get("name", "unknown")
+                        error_message = error_info.get("message", "")
 
                         # Filter out application context errors
-                        if 'RuntimeError: Working outside of application context.' in error_message:
+                        if (
+                            "RuntimeError: Working outside of application context."
+                            in error_message
+                        ):
                             continue
 
                         # Create unique identifier for the error
-                        error_id = f'{test_file}::{test_name}'
+                        error_id = f"{test_file}::{test_name}"
 
                         # Get first line of error for summary
-                        error_summary = error_message.split('\n')[0] if error_message else 'No error message'
+                        error_summary = (
+                            error_message.split("\n")[0]
+                            if error_message
+                            else "No error message"
+                        )
 
                         error_data = {
-                            'id': error_id,
-                            'file': test_file,
-                            'test_name': test_name,
-                            'error_summary': error_summary,
-                            'error_full': error_message,
-                            'addressed': self.addressed_errors.get(error_id, False),
-                            'timestamp': timestamp,
+                            "id": error_id,
+                            "file": test_file,
+                            "test_name": test_name,
+                            "error_summary": error_summary,
+                            "error_full": error_message,
+                            "addressed": self.addressed_errors.get(error_id, False),
+                            "timestamp": timestamp,
                         }
 
                         # Keep the error with the newest timestamp if there are duplicates
-                        if error_id not in error_dict or timestamp > error_dict[error_id]['timestamp']:
+                        if (
+                            error_id not in error_dict
+                            or timestamp > error_dict[error_id]["timestamp"]
+                        ):
                             error_dict[error_id] = error_data
 
                     except (json.JSONDecodeError, KeyError) as e:
-                        print(f'Warning: Could not parse line {line_num}: {e}')
+                        print(f"Warning: Could not parse line {line_num}: {e}")
                         continue
 
         except IOError as e:
-            print(f'Error: Could not read CSV file: {e}')
+            print(f"Error: Could not read CSV file: {e}")
 
         # Convert dictionary values to list and sort by error ID alphabetically
-        self.errors = sorted(error_dict.values(), key=lambda x: x['id'])
-
-    def get_errors(self, page: int = 1) -> Dict:
-        """Get paginated errors."""
-        start_idx = (page - 1) * PAGE_SIZE
-        end_idx = start_idx + PAGE_SIZE
-
-        total_pages = (len(self.errors) + PAGE_SIZE - 1) // PAGE_SIZE
-
-        return {
-            'errors': self.errors[start_idx:end_idx],
-            'pagination': {
-                'current_page': page,
-                'total_pages': total_pages,
-                'total_errors': len(self.errors),
-                'has_prev': page > 1,
-                'has_next': page < total_pages,
-            },
-        }
+        self.errors = sorted(error_dict.values(), key=lambda x: x["id"])
 
     def toggle_error_status(self, error_id: str) -> bool:
         """Toggle the addressed status of an error."""
@@ -148,24 +141,24 @@ class ErrorTracker:
 
         # Update the error in our list
         for error in self.errors:
-            if error['id'] == error_id:
-                error['addressed'] = self.addressed_errors[error_id]
+            if error["id"] == error_id:
+                error["addressed"] = self.addressed_errors[error_id]
                 break
 
         self._save_persistence()
         return self.addressed_errors[error_id]
 
-    def get_stats(self) -> Dict:
+    def get_stats(self):
         """Get error statistics."""
         total = len(self.errors)
-        addressed = sum(1 for error in self.errors if error['addressed'])
+        addressed = sum(1 for error in self.errors if error["addressed"])
         unaddressed = total - addressed
 
         return {
-            'total': total,
-            'addressed': addressed,
-            'unaddressed': unaddressed,
-            'progress_percent': round((addressed / total * 100) if total > 0 else 0, 1),
+            "total": total,
+            "addressed": addressed,
+            "unaddressed": unaddressed,
+            "progress_percent": round((addressed / total * 100) if total > 0 else 0, 1),
         }
 
 
@@ -173,27 +166,27 @@ class ErrorTracker:
 error_tracker = ErrorTracker(CSV_FILE, PERSISTENCE_FILE)
 
 
-@app.route('/')
+@app.route("/")
 def index():
     """Main page displaying errors."""
-    page = request.args.get('page', 1, type=int)
-    data = error_tracker.get_errors(page)
     stats = error_tracker.get_stats()
 
-    return render_template_string(HTML_TEMPLATE, errors=data['errors'], pagination=data['pagination'], stats=stats)
+    return render_template_string(
+        HTML_TEMPLATE, errors=error_tracker.errors, stats=stats
+    )
 
 
-@app.route('/api/toggle/<path:error_id>', methods=['POST'])
+@app.route("/api/toggle/<path:error_id>", methods=["POST"])
 def toggle_error(error_id):
     """API endpoint to toggle error status."""
     try:
         new_status = error_tracker.toggle_error_status(error_id)
-        return jsonify({'success': True, 'error_id': error_id, 'addressed': new_status})
+        return jsonify({"success": True, "error_id": error_id, "addressed": new_status})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route('/api/stats')
+@app.route("/api/stats")
 def get_stats():
     """API endpoint to get current statistics."""
     return jsonify(error_tracker.get_stats())
@@ -663,14 +656,14 @@ HTML_TEMPLATE = """
 """
 
 
-if __name__ == '__main__':
-    print('DataDog Error Viewer')
-    print('=' * 30)
-    print(f'CSV file: {CSV_FILE}')
-    print(f'Persistence file: {PERSISTENCE_FILE}')
-    print(f'Total errors loaded: {len(error_tracker.errors)}')
+if __name__ == "__main__":
+    print("DataDog Error Viewer")
+    print("=" * 30)
+    print(f"CSV file: {CSV_FILE}")
+    print(f"Persistence file: {PERSISTENCE_FILE}")
+    print(f"Total errors loaded: {len(error_tracker.errors)}")
     print(f"Addressed errors: {sum(1 for e in error_tracker.errors if e['addressed'])}")
-    print('\nStarting Flask application...')
-    print('Open http://localhost:6969 in your browser')
+    print("\nStarting Flask application...")
+    print("Open http://localhost:6969 in your browser")
 
-    app.run(debug=True, host='0.0.0.0', port=6969)
+    app.run(debug=True, host="0.0.0.0", port=6969)
