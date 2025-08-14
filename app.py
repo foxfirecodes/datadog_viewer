@@ -55,6 +55,9 @@ class ErrorTracker:
             print(f"Warning: CSV file '{self.csv_file}' not found")
             return
 
+        # Dictionary to track errors by ID, keeping the newest timestamp
+        error_dict = {}
+
         try:
             with open(self.csv_file, 'r', encoding='utf-8') as f:
                 reader = csv.reader(f)
@@ -65,6 +68,15 @@ class ErrorTracker:
                         continue
 
                     try:
+                        # Parse timestamp from first column
+                        timestamp_str = row[0]
+                        try:
+                            # Parse ISO 8601 timestamp
+                            timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        except ValueError:
+                            print(f'Warning: Could not parse timestamp on line {line_num}: {timestamp_str}')
+                            continue
+
                         # Parse the JSON message
                         message_data = json.loads(row[1])
                         test_info = message_data.get('test', {})
@@ -85,16 +97,19 @@ class ErrorTracker:
                         # Get first line of error for summary
                         error_summary = error_message.split('\n')[0] if error_message else 'No error message'
 
-                        self.errors.append(
-                            {
-                                'id': error_id,
-                                'file': test_file,
-                                'test_name': test_name,
-                                'error_summary': error_summary,
-                                'error_full': error_message,
-                                'addressed': self.addressed_errors.get(error_id, False),
-                            }
-                        )
+                        error_data = {
+                            'id': error_id,
+                            'file': test_file,
+                            'test_name': test_name,
+                            'error_summary': error_summary,
+                            'error_full': error_message,
+                            'addressed': self.addressed_errors.get(error_id, False),
+                            'timestamp': timestamp,
+                        }
+
+                        # Keep the error with the newest timestamp if there are duplicates
+                        if error_id not in error_dict or timestamp > error_dict[error_id]['timestamp']:
+                            error_dict[error_id] = error_data
 
                     except (json.JSONDecodeError, KeyError) as e:
                         print(f'Warning: Could not parse line {line_num}: {e}')
@@ -102,6 +117,9 @@ class ErrorTracker:
 
         except IOError as e:
             print(f'Error: Could not read CSV file: {e}')
+
+        # Convert dictionary values to list and sort by error ID alphabetically
+        self.errors = sorted(error_dict.values(), key=lambda x: x['id'])
 
     def get_errors(self, page: int = 1) -> Dict:
         """Get paginated errors."""
