@@ -449,6 +449,27 @@ HTML_TEMPLATE = """
         .clickable:hover {
             background-color: #f5f5f5;
         }
+        .copy-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.2s;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .copy-btn:hover {
+            background: #0056b3;
+        }
+        .copy-btn:active {
+            background: #004085;
+        }
+        .copy-btn.copied {
+            background: #28a745;
+        }
     </style>
 </head>
 <body>
@@ -519,7 +540,14 @@ HTML_TEMPLATE = """
                                        @change="toggleError(error.id, $event.target)">
                             </td>
                             <td class="file-cell" x-text="error.file"></td>
-                            <td class="test-cell" x-text="error.test_name"></td>
+                            <td class="test-cell">
+                                <button class="copy-btn" 
+                                        @click="copyErrorId(error.id)"
+                                        title="Copy error ID to clipboard">
+                                    📋
+                                </button>
+                                <span x-text="error.test_name"></span>
+                            </td>
                             <td class="error-cell">
                                 <div class="error-summary" 
                                      @click="toggleErrorDetails(error.id)"
@@ -696,6 +724,36 @@ HTML_TEMPLATE = """
                     } catch (error) {
                         console.error('Error updating stats:', error);
                     }
+                },
+                
+                copyErrorId(errorId) {
+                    // Copy the error ID to clipboard
+                    navigator.clipboard.writeText(errorId).then(() => {
+                        // Find the button that was clicked and show visual feedback
+                        const buttons = document.querySelectorAll('.copy-btn');
+                        buttons.forEach(btn => {
+                            if (btn.getAttribute('onclick')?.includes(errorId) || 
+                                btn.closest('tr')?.querySelector('.error-cell')?.textContent?.includes(errorId)) {
+                                btn.classList.add('copied');
+                                btn.textContent = '✓';
+                                
+                                // Reset button after 2 seconds
+                                setTimeout(() => {
+                                    btn.classList.remove('copied');
+                                    btn.textContent = '📋';
+                                }, 2000);
+                            }
+                        });
+                    }).catch(err => {
+                        console.error('Failed to copy: ', err);
+                        // Fallback for older browsers
+                        const textArea = document.createElement('textarea');
+                        textArea.value = errorId;
+                        document.body.appendChild(textArea);
+                        textArea.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(textArea);
+                    });
                 }
             }
         }
