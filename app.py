@@ -303,6 +303,97 @@ HTML_TEMPLATE = """
             background: #27ae60;
             transition: width 0.3s ease;
         }
+        .log-filters-section {
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .log-filter-input {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .log-filter-input input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        .log-filter-input input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+        }
+        .log-filter-input button {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.2s;
+        }
+        .log-filter-input button:hover {
+            background: #0056b3;
+        }
+        .log-filter-input button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .log-filters-list {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .log-filter-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            border-bottom: 1px solid #dee2e6;
+            gap: 15px;
+        }
+        .log-filter-item:last-child {
+            border-bottom: none;
+        }
+        .log-filter-item:hover {
+            background-color: #f8f9fa;
+        }
+        .log-filter-delete {
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.2s;
+        }
+        .log-filter-delete:hover {
+            background: #c82333;
+        }
+        .log-filter-checkbox {
+            transform: scale(1.2);
+            cursor: pointer;
+        }
+        .log-filter-content {
+            flex: 1;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            color: #495057;
+        }
+        .log-filter-count {
+            background: #6c757d;
+            color: white;
+            border-radius: 12px;
+            padding: 4px 8px;
+            font-size: 12px;
+            font-weight: 500;
+            min-width: 30px;
+            text-align: center;
+        }
         .table-container {
             overflow-x: auto;
         }
@@ -537,6 +628,36 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
+        <div class="log-filters-section">
+            <div class="log-filter-input">
+                <input type="text" 
+                       placeholder="Enter log string to filter out (e.g., 'RuntimeError: Working outside of application context')"
+                       x-model="newLogFilter"
+                       @keyup.enter="addLogFilter"
+                       @input="validateLogFilter">
+                <button @click="addLogFilter" 
+                        :disabled="!newLogFilter.trim() || logFilters.some(f => f.filter === newLogFilter.trim())">
+                    Add Filter
+                </button>
+            </div>
+
+            <div class="log-filters-list" x-show="logFilters.length > 0">
+                <template x-for="(filter, index) in logFilters" x-key="index">
+                    <div class="log-filter-item">
+                        <button class="log-filter-delete" @click="removeLogFilter(index)" title="Delete filter">
+                            ×
+                        </button>
+                        <input type="checkbox" 
+                               class="log-filter-checkbox"
+                               :checked="filter.enabled"
+                               @change="toggleLogFilter(index)">
+                        <div class="log-filter-content" x-text="filter.filter"></div>
+                        <div class="log-filter-count" x-text="getLogFilterCount(filter.filter)"></div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
         <div class="search-bar">
             <input type="text" 
                    class="search-input" 
@@ -620,13 +741,13 @@ HTML_TEMPLATE = """
             <a href="#" 
                @click.prevent="changePage(currentPage - 1)"
                :class="{ 'disabled': currentPage <= 1 }">&laquo; Previous</a>
-            
+
             <template x-for="pageNum in pageNumbers" x-key="pageNum">
                 <span :class="{ 'current': pageNum === currentPage, 'clickable': pageNum !== currentPage }"
                       x-text="pageNum"
                       @click="pageNum !== currentPage && changePage(pageNum)"></span>
             </template>
-            
+
             <a href="#" 
                @click.prevent="changePage(currentPage + 1)"
                :class="{ 'disabled': currentPage >= totalPages }">Next &raquo;</a>
@@ -644,28 +765,33 @@ HTML_TEMPLATE = """
                 currentPage: 1,
                 pageSize: 50,
                 stats: { total: 0, addressed: 0, unaddressed: 0, progress_percent: 0 },
-                
+                newLogFilter: '',
+                logFilters: [],
+
                 init() {
                     // Initialize with data from Flask
                     this.allErrors = {{ errors | tojson }};
                     this.stats = {{ stats | tojson }};
-                    
+
                     // Add showDetails property to each error (default: false)
                     this.allErrors.forEach(error => {
                         error.showDetails = false;
                         error.loading = false;
                         error.selected = false; // Initialize selected state
                     });
-                    
+
+                    // Load log filters from localStorage
+                    this.loadLogFilters();
+
                     this.filteredErrors = [...this.allErrors];
-                    
+
                     // Add keyboard event listener for Escape key
                     document.addEventListener('keydown', (event) => {
                         if (event.key === 'Escape') {
                             this.clearAllSelections();
                         }
                     });
-                    
+
                     // Add click listener to document body to clear selections when clicking outside
                     document.addEventListener('click', (event) => {
                         // Only clear if clicking outside the table rows
@@ -674,7 +800,71 @@ HTML_TEMPLATE = """
                         }
                     });
                 },
-                
+
+                loadLogFilters() {
+                    try {
+                        const saved = localStorage.getItem('datadog_log_filters');
+                        if (saved) {
+                            this.logFilters = JSON.parse(saved);
+                        }
+                    } catch (e) {
+                        console.error('Error loading log filters:', e);
+                        this.logFilters = [];
+                    }
+                },
+
+                saveLogFilters() {
+                    try {
+                        localStorage.setItem('datadog_log_filters', JSON.stringify(this.logFilters));
+                    } catch (e) {
+                        console.error('Error saving log filters:', e);
+                    }
+                },
+
+                addLogFilter() {
+                    const filterText = this.newLogFilter.trim();
+                    if (!filterText) return;
+
+                    // Check if filter already exists
+                    if (this.logFilters.some(f => f.filter === filterText)) {
+                        return;
+                    }
+
+                    const newFilter = {
+                        filter: filterText,
+                        enabled: true
+                    };
+
+                    this.logFilters.push(newFilter);
+                    this.saveLogFilters();
+                    this.newLogFilter = '';
+                    this.filterErrors();
+                },
+
+                removeLogFilter(index) {
+                    this.logFilters.splice(index, 1);
+                    this.saveLogFilters();
+                    this.filterErrors();
+                },
+
+                toggleLogFilter(index) {
+                    this.logFilters[index].enabled = !this.logFilters[index].enabled;
+                    this.saveLogFilters();
+                    this.filterErrors();
+                },
+
+                validateLogFilter() {
+                    // This method can be used for additional validation if needed
+                },
+
+                getLogFilterCount(filterString) {
+                    if (!this.allErrors) return 0;
+
+                    return this.allErrors.filter(error => 
+                        error.error_full.includes(filterString)
+                    ).length;
+                },
+
                 get paginatedErrors() {
                     if (!this.filteredErrors || this.filteredErrors.length === 0) {
                         return [];
@@ -683,34 +873,47 @@ HTML_TEMPLATE = """
                     const end = start + this.pageSize;
                     return this.filteredErrors.slice(start, end);
                 },
-                
+
                 get totalPages() {
                     if (!this.filteredErrors) return 1;
                     return Math.ceil(this.filteredErrors.length / this.pageSize);
                 },
-                
+
                 get pageNumbers() {
                     if (!this.filteredErrors) return [];
                     const pages = [];
                     const maxVisible = 7;
                     let start = Math.max(1, this.currentPage - Math.floor(maxVisible / 2));
                     let end = Math.min(this.totalPages, start + maxVisible - 1);
-                    
+
                     if (end - start + 1 < maxVisible) {
                         start = Math.max(1, end - maxVisible + 1);
                     }
-                    
+
                     for (let i = start; i <= end; i++) {
                         pages.push(i);
                     }
                     return pages;
                 },
-                
+
                 filterErrors() {
                     if (!this.allErrors) return;
-                    
+
                     let filtered = this.allErrors;
-                    
+
+                    // Apply log filters first
+                    this.logFilters.forEach(logFilter => {
+                        if (logFilter.enabled) {
+                            // If enabled, filter exclusive (only include logs with this string)
+                            filtered = filtered.filter(error => error.error_full.includes(logFilter.filter))
+                        } else {
+                            // If disabled, filter out logs containing this string
+                            filtered = filtered.filter(error => 
+                                !error.error_full.includes(logFilter.filter)
+                            );
+                        }
+                    });
+
                     // Apply search filter
                     if (this.searchQuery.trim()) {
                         const query = this.searchQuery.toLowerCase();
@@ -721,46 +924,63 @@ HTML_TEMPLATE = """
                             error.error_full.toLowerCase().includes(query)
                         );
                     }
-                    
+
                     // Apply status filter
                     if (this.statusFilter === 'addressed') {
                         filtered = filtered.filter(error => error.addressed);
                     } else if (this.statusFilter === 'unaddressed') {
                         filtered = filtered.filter(error => !error.addressed);
                     }
-                    
+
                     this.filteredErrors = filtered;
                     this.currentPage = 1; // Reset to first page when filtering
                 },
-                
+
                 changePage(page) {
                     if (page >= 1 && page <= this.totalPages) {
                         this.currentPage = page;
                     }
                 },
-                
+
                 toggleErrorDetails(errorId) {
                     const error = this.allErrors.find(e => e.id === errorId);
                     if (error) {
                         error.showDetails = !error.showDetails;
                     }
                 },
-                
+
                 toggleAllErrorDetails() {
                     const checkbox = document.getElementById('showDetails');
                     const showAll = checkbox.checked;
-                    
+
                     this.allErrors.forEach(error => {
                         error.showDetails = showAll;
                     });
                 },
-                
+
                 async toggleError(errorId, checkbox) {
                     const error = this.allErrors.find(e => e.id === errorId);
                     if (!error) return;
-                    
+
+                    // Check if this is a bulk operation
+                    const selectedErrors = this.getSelectedErrors();
+                    const isBulkOperation = selectedErrors.length > 1 && error.selected;
+
+                    if (isBulkOperation) {
+                        // Apply to all selected rows
+                        await this.bulkToggleErrors(selectedErrors, checkbox.checked);
+                    } else {
+                        // Single row operation
+                        await this.singleToggleError(errorId, checkbox);
+                    }
+                },
+
+                async singleToggleError(errorId, checkbox) {
+                    const error = this.allErrors.find(e => e.id === errorId);
+                    if (!error) return;
+
                     error.loading = true;
-                    
+
                     try {
                         const response = await fetch(`/api/toggle/${encodeURIComponent(errorId)}`, {
                             method: 'POST',
@@ -768,9 +988,9 @@ HTML_TEMPLATE = """
                                 'Content-Type': 'application/json',
                             }
                         });
-                        
+
                         const data = await response.json();
-                        
+
                         if (data.success) {
                             error.addressed = data.addressed;
                             this.updateStats();
@@ -785,7 +1005,49 @@ HTML_TEMPLATE = """
                         error.loading = false;
                     }
                 },
-                
+
+                async bulkToggleErrors(selectedErrors, newStatus) {
+                    // Set loading state for all selected errors
+                    selectedErrors.forEach(error => {
+                        error.loading = true;
+                    });
+
+                    try {
+                        // Process all selected errors
+                        const promises = selectedErrors.map(error => 
+                            fetch(`/api/toggle/${encodeURIComponent(error.id)}`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                }
+                            }).then(response => response.json())
+                        );
+
+                        const results = await Promise.all(promises);
+
+                        // Update all errors based on results
+                        results.forEach((result, index) => {
+                            if (result.success) {
+                                selectedErrors[index].addressed = result.addressed;
+                            } else {
+                                console.error(`Error toggling status for ${selectedErrors[index].id}:`, result.error);
+                            }
+                        });
+
+                        this.updateStats();
+
+                        // Don't clear selections after bulk operation - keep them selected
+
+                    } catch (error) {
+                        console.error('Error in bulk operation:', error);
+                    } finally {
+                        // Clear loading state for all selected errors
+                        selectedErrors.forEach(error => {
+                            error.loading = false;
+                        });
+                    }
+                },
+
                 async updateStats() {
                     try {
                         const response = await fetch('/api/stats');
@@ -795,7 +1057,7 @@ HTML_TEMPLATE = """
                         console.error('Error updating stats:', error);
                     }
                 },
-                
+
                 copyErrorId(errorId) {
                     // Copy the error ID to clipboard
                     navigator.clipboard.writeText(errorId).then(() => {
@@ -806,7 +1068,7 @@ HTML_TEMPLATE = """
                                 btn.closest('tr')?.querySelector('.error-cell')?.textContent?.includes(errorId)) {
                                 btn.classList.add('copied');
                                 btn.textContent = '✓';
-                                
+
                                 // Reset button after 2 seconds
                                 setTimeout(() => {
                                     btn.classList.remove('copied');
@@ -851,12 +1113,12 @@ HTML_TEMPLATE = """
                 selectRowRange(startId, endId) {
                     const startIndex = this.allErrors.findIndex(e => e.id === startId);
                     const endIndex = this.allErrors.findIndex(e => e.id === endId);
-                    
+
                     if (startIndex === -1 || endIndex === -1) return;
-                    
+
                     const start = Math.min(startIndex, endIndex);
                     const end = Math.max(startIndex, endIndex);
-                    
+
                     for (let i = start; i <= end; i++) {
                         this.allErrors[i].selected = true;
                     }
@@ -871,103 +1133,12 @@ HTML_TEMPLATE = """
                 getSelectedErrors() {
                     return this.allErrors.filter(error => error.selected);
                 },
-
-                async toggleError(errorId, checkbox) {
-                    const error = this.allErrors.find(e => e.id === errorId);
-                    if (!error) return;
-                    
-                    // Check if this is a bulk operation
-                    const selectedErrors = this.getSelectedErrors();
-                    const isBulkOperation = selectedErrors.length > 1 && error.selected;
-                    
-                    if (isBulkOperation) {
-                        // Apply to all selected rows
-                        await this.bulkToggleErrors(selectedErrors, checkbox.checked);
-                    } else {
-                        // Single row operation
-                        await this.singleToggleError(errorId, checkbox);
-                    }
-                },
-
-                async singleToggleError(errorId, checkbox) {
-                    const error = this.allErrors.find(e => e.id === errorId);
-                    if (!error) return;
-                    
-                    error.loading = true;
-                    
-                    try {
-                        const response = await fetch(`/api/toggle/${encodeURIComponent(errorId)}`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            }
-                        });
-                        
-                        const data = await response.json();
-                        
-                        if (data.success) {
-                            error.addressed = data.addressed;
-                            this.updateStats();
-                        } else {
-                            console.error('Error toggling status:', data.error);
-                            checkbox.checked = !checkbox.checked; // Revert checkbox
-                        }
-                    } catch (error) {
-                        console.error('Error:', error);
-                        checkbox.checked = !checkbox.checked; // Revert checkbox
-                    } finally {
-                        error.loading = false;
-                    }
-                },
-
-                async bulkToggleErrors(selectedErrors, newStatus) {
-                    // Set loading state for all selected errors
-                    selectedErrors.forEach(error => {
-                        error.loading = true;
-                    });
-                    
-                    try {
-                        // Process all selected errors
-                        const promises = selectedErrors.map(error => 
-                            fetch(`/api/toggle/${encodeURIComponent(error.id)}`, {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                }
-                            }).then(response => response.json())
-                        );
-                        
-                        const results = await Promise.all(promises);
-                        
-                        // Update all errors based on results
-                        results.forEach((result, index) => {
-                            if (result.success) {
-                                selectedErrors[index].addressed = result.addressed;
-                            } else {
-                                console.error(`Error toggling status for ${selectedErrors[index].id}:`, result.error);
-                            }
-                        });
-                        
-                        this.updateStats();
-                        
-                        // Don't clear selections after bulk operation - keep them selected
-                        
-                    } catch (error) {
-                        console.error('Error in bulk operation:', error);
-                    } finally {
-                        // Clear loading state for all selected errors
-                        selectedErrors.forEach(error => {
-                            error.loading = false;
-                        });
-                    }
-                },
             }
         }
     </script>
 </body>
 </html>
 """
-
 
 if __name__ == "__main__":
     print("DataDog Error Viewer")
