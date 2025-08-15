@@ -552,11 +552,7 @@ HTML_TEMPLATE = """
             position: relative;
         }
         tbody tr {
-            user-select: none; /* Prevent text selection on table rows */
             cursor: pointer; /* Show pointer cursor to indicate clickable */
-        }
-        tbody tr.selected {
-            user-select: none; /* Ensure selected rows also prevent text selection */
         }
         tbody tr:not(.selected):hover {
             background-color: #f0f8ff; /* Light blue hover for non-selected rows */
